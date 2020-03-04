@@ -1,7 +1,7 @@
 ---
 title: "Running Cortex with Cassandra"
 linkTitle: "Running Cortex with Cassandra"
-weight: 7
+weight: 4
 slug: cassandra
 ---
 
@@ -109,8 +109,8 @@ storage:
     keyspace: KEYSPACE   # configure desired keyspace here.
 ```
 
-The latest tag is not published for the Cortex docker image. Visit quay.io/repository/cortexproject/cortex 
-to find the latest stable version tag and use it in the command bellow. At the time of writing it was v0.6.1. 
+The latest tag is not published for the Cortex docker image. Visit quay.io/repository/cortexproject/cortex
+to find the latest stable version tag and use it in the command bellow. At the time of writing it was v0.6.1.
 
 Run Cortex using the latest stable version:
 
