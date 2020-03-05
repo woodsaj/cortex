@@ -82,7 +82,10 @@ See [Authentication and Authorisation](auth.md) for more information.
 
 ## 7. Handling HA Prometheus Pairs
 
-ha-pair-handling.md
+You should use a pair of Prometheus servers to monitor you jobs and send data to Cortex.
+This allows you monitoring system to survive the failure of one of these Prometheus instances.
+Cortex support deduping the samples on ingestion.
+For more information on how to configure Cortex and Prometheus to HA pairs, see [Config for sending HA Pairs data to Cortex](ha-pair-handling.md).
 
 ## 8. Scalable Rules & Alerts.
 
