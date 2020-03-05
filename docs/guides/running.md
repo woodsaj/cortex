@@ -12,11 +12,17 @@ Ensure you have completed all the steps in the getting started guide before you 
 
 The getting started guide uses local chunk storage.
 Local chunk storage is experimental and shouldn’t be used in production.
-For production systems, it is recommended you use chunk storage with one of the following backend:
+
+Cortex requires a scalable storage back-end for production systems.
+It is recommended you use chunk storage with one of the following back-ends:
 
 * DynamoDB/S3 (see [Cortex on AWS](./storage-aws.md))
 * BigTable/GCS (TODO)
 * Cassandra (see [Cortex on Cassandra](./storage-cassandra.md))
+
+Commercial cloud options are DynamoDB and Bigtable: the advantage is you don't have to know how to manage them, but the downside is they have specific costs.
+
+Alternatively you can choose Cassandra, which you will have to install and manage.
 
 Cortex has an alternative to chunk storage: block storage.  Block storage is not ready for production usage at this time.
 
@@ -33,12 +39,15 @@ The **Querier** component (or single-process Cortex) “pulls” queries from th
 The **Queriers** should not use the load balancer to access the **Query Frontend**.
 In Kubernetes, you should use a separate headless service.
 
-To configure the **Queries** to use the **Query Frontend**, set the following flags:
+To configure the **Queries** to use the **Query Frontend**, set the following flag:
 
 ```
   -querier.frontend-address string
     	Address of query frontend service.
 ```
+
+There are other flag you can use to control the behaviour of the frontend - concurrency, retries, etc.
+See [Query Frontend configuration](../configuration/arguments.md#Query_Frontend) for more information.
 
 The **Query Frontend** can run using an in-process cache, but should be configured with an external Memcached for production workloads.
 The next section has more details.

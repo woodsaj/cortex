@@ -1,7 +1,7 @@
 ---
 title: "Running Cortex on Kubernetes"
 linkTitle: "Running Cortex on Kubernetes"
-weight: 1
+weight: 100
 slug: kubernetes
 ---
 
