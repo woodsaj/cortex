@@ -5,179 +5,76 @@ weight: 1
 slug: running-in-production
 ---
 
-This document assumes you have read the
-[architecture](architecture.md) document.
+This document builds on the [getting started guide](../getting_started.md) and specifies the steps needed to get Cortex into production.
+Ensure you have completed all the steps in the getting started guide before you start this one.
 
-In addition to the general advice in this document, please see these
-platform-specific notes:
+## 1. Pick a storage backend
 
-- [AWS](aws-specific.md)
+The getting started guide uses local chunk storage.
+Local chunk storage is experimental and shouldn’t be used in production.
+For production systems, it is recommended you use chunk storage with one of the following backend:
 
-## Planning
+* DynamoDB/S3 (see [Cortex on AWS](./storage-aws.md))
+* BigTable/GCS (TODO)
+* Cassandra (see [Cortex on Cassandra](./storage-cassandra.md))
 
-### Tenants
+Cortex has an alternative to chunk storage: block storage.  Block storage is not ready for production usage at this time.
 
-If you will run Cortex as a multi-tenant system, you need to give each
-tenant a unique ID - this can be any string. Managing tenants and
-allocating IDs must be done outside of Cortex. You must also configure
-[Authentication and Authorisation](auth.md).
+## 2. Deploy Query Frontend
 
-### Storage
+The **Query Frontend** is the Cortex component which parallelizes the execution of and caches the results of queries.
+The **Query Frontend** is also responsible for retries and multi-tenant QoS.
 
-Cortex requires a scalable storage back-end.  Commercial cloud options
-are DynamoDB and Bigtable: the advantage is you don't have to know how
-to manage them, but the downside is they have specific costs.
-Alternatively you can choose Cassandra, which you will have to install
-and manage.
+For the multi-tenant QoS algorithms to work, you should not run more than two **Query Frontends**.
+The **Query Frontend** should be deployed behind a load balancer, and should only be sent queries -- writes should go straight to the Distributor component, or to the single-process Cortex.
 
-### Components
+The **Querier** component (or single-process Cortex) “pulls” queries from the queues in the **Query Frontend**.
+**Queriers** discover the **Query Frontend** via DNS SRV records.
+The **Queriers** should not use the load balancer to access the **Query Frontend**.
+In Kubernetes, you should use a separate headless service.
 
-Every Cortex installation will need Distributor, Ingester and Querier.
-Alertmanager, Ruler and Query-frontend are optional.
+To configure the **Queries** to use the **Query Frontend**, set the following flags:
 
-### Other dependencies
+```
+  -querier.frontend-address string
+    	Address of query frontend service.
+```
 
-Cortex needs a KV store to track sharding of data between
-processes. This can be either Etcd or Consul.
+The **Query Frontend** can run using an in-process cache, but should be configured with an external Memcached for production workloads.
+The next section has more details.
 
-If you want to configure recording and alerting rules (i.e. if you
-will run the Ruler and Alertmanager components) then a Postgres
-database is required to store configs.
-
-Memcached is not essential but highly recommended.
-
-### Ingester replication factor
-
-The standard replication factor is three, so that we can drop one
-replica and be unconcerned, as we still have two copies of the data
-left for redundancy. This is configurable: you can run with more
-redundancy or less, depending on your risk appetite.
-
-### Schema
-
-#### Schema periodic table
-
-The periodic table from argument (`-dynamodb.periodic-table.from=<date>` if
-using command line flags, the `from` field for the first schema entry if using
-YAML) should be set to the date the oldest metrics you will be sending to
-Cortex. Generally that means set it to the date you are first deploying this
-instance. If you use an example date from years ago table-manager will create
-hundreds of tables. You can also avoid creating too many tables by setting a
-reasonable retention in the table-manager
-(`-table-manager.retention-period=<duration>`).
-
-#### Schema version
-
-Choose schema version 9 in most cases; version 10 if you expect
-hundreds of thousands of timeseries under a single name.  Anything
-older than v9 is much less efficient.
-
-### Chunk encoding
-
-Standard choice would be Bigchunk, which is the most flexible chunk
-encoding. You may get better compression from Varbit, if many of your
-timeseries do not change value from one day to the next.
-
-### Sizing
-
-You will want to estimate how many nodes are required, how many of
-each component to run, and how much storage space will be required.
-In practice, these will vary greatly depending on the metrics being
-sent to Cortex.
-
-Some key parameters are:
-
- 1. The number of active series. If you have Prometheus already you
- can query `prometheus_tsdb_head_series` to see this number.
- 2. Sampling rate, e.g. a new sample for each series every 15
- seconds. Multiply this by the number of active series to get the
- total rate at which samples will arrive at Cortex.
- 3. The rate at which series are added and removed. This can be very
- high if you monitor objects that come and go - for example if you run
- thousands of batch jobs lasting a minute or so and capture metrics
- with a unique ID for each one. [Read how to analyse this on
- Prometheus](https://www.robustperception.io/using-tsdb-analyze-to-investigate-churn-and-cardinality)
- 4. How compressible the time-series data are. If a metric stays at
- the same value constantly, then Cortex can compress it very well, so
- 12 hours of data sampled every 15 seconds would be around 2KB.  On
- the other hand if the value jumps around a lot it might take 10KB.
- There are not currently any tools available to analyse this.
- 5. How long you want to retain data for, e.g. 1 month or 2 years.
-
-Other parameters which can become important if you have particularly
-high values:
-
- 6. Number of different series under one metric name.
- 7. Number of labels per series.
- 8. Rate and complexity of queries.
-
-Now, some rules of thumb:
-
- 1. Each million series in an ingester takes 15GB of RAM. Total number
- of series in ingesters is number of active series times the
- replication factor. This is with the default of 12-hour chunks - RAM
- required will reduce if you set `-ingester.max-chunk-age` lower
- (trading off more back-end database IO)
- 2. Each million series (including churn) consumes 15GB of chunk
- storage and 4GB of index, per day (so multiply by the retention
- period).
- 3. Each 100,000 samples/sec arriving takes 1 CPU in distributors.
- Distributors don't need much RAM.
-
-If you turn on compression between distributors and ingesters (for
-example to save on inter-zone bandwidth charges at AWS) they will use
-significantly more CPU (approx 100% more for distributor and 50% more
-for ingester).
-
-### Caching
+## 3. Setup Caching
 
 Correctly configured caching is important for a production-ready Cortex cluster.
+Cortex has many opportunities for using caching to accelerate queries and reduce cost.
 
-See [Caching In Cortex](caching.md) for more information.
+For more information, see the [Caching in Cortex documentation.](./caching.md)
 
+## 4. Monitoring and Alerting
 
+Cortex exports metrics in the Prometheus format.
+We recommend you install and configure Prometheus server to monitor your Cortex cluster.
 
-### Remote writing Prometheus
+We publish a set of Prometheus alerts and Grafana dashboards as the [cortex-mixin](https://github.com/grafana/cortex-jsonnet).
+We recommend you use these for any production Cortex cluster.
 
-To configure your Prometheus instances for remote writes take a look at
-the [Prometheus Remote Write Config](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#remote_write). We recommend to tune the following
-parameters of the `queue_config`:
+## 5. Write Ahead Log
 
-```yaml
-remote_write:
-  - queue_config:
-      capacity: 5000
-      max_shards: 20
-      min_shards: 5
-      max_samples_per_send: 1000
-```
+Cortex uses a Write Ahead Log (WAL) to ensure data that is written to Cortex and buffered in memory is not lost should Cortex restart before it has the chance to flush.
 
-Please take note that these values are tweaked for our use cases
-and may be necessary to adapt depending on your workload. Take a
-look at the [remote write tuning docs](https://prometheus.io/docs/practices/remote_write/).
+For more information on configuring the WAL, see [Ingesters with WAL](ingesters-with-wal.md).
 
-If you experience a rather high delay for your metrics to appear in
-Cortex (15s+) you can try increasing the `min_shards` in your remote
-write config. Sometimes Prometheus does not increase the number of
-shards even though it hasn't caught up the lag. You can monitor the
-delay with this Prometheus query:
+## 6. Authentication & Multitenancy
 
-```
-time() - sum by (statefulset_kubernetes_io_pod_name) (prometheus_remote_storage_queue_highest_sent_timestamp_seconds)
-```
+If you want to run Cortex as a multi-tenant system, you need to give each
+tenant a unique ID - this can be any string.
+Managing tenants and allocating IDs must be done outside of Cortex.
+See [Authentication and Authorisation](auth.md) for more information.
 
-## Optimising
+## 7. Handling HA Prometheus Pairs
 
-### Optimising Storage
+ha-pair-handling.md
 
-These ingester options reduce the chance of storing multiple copies of
-the same data:
+## 8. Scalable Rules & Alerts.
 
-        -ingester.spread-flushes=true
-        -ingester.chunk-age-jitter=0
-
-Add a chunk cache via `-memcached.hostname` to allow writes to be de-duplicated.
-
-As recommended under [Chunk encoding](#chunk-encoding), use Bigchunk:
-
-        -ingester.chunk-encoding=3 # bigchunk
+TODO
