@@ -640,3 +640,17 @@ var modules = map[moduleName]module{
 		deps: []moduleName{Querier, Ingester, Distributor, TableManager, DataPurger},
 	},
 }
+
+func InjectModule(name string, deps []string, service func(t *Cortex, cfg *Config) (services.Service, error), wrappedService func(t *Cortex, cfg *Config) (services.Service, error)) {
+	moduleDeps := make([]moduleName, len(deps))
+
+	for i := range deps {
+		moduleDeps[i] = moduleName(deps[i])
+	}
+
+	modules[moduleName(name)] = module{
+		deps:           moduleDeps,
+		service:        service,
+		wrappedService: wrappedService,
+	}
+}
