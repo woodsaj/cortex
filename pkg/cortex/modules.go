@@ -103,7 +103,7 @@ func (t *Cortex) initServer(cfg *Config) (services.Service, error) {
 		return nil, err
 	}
 
-	t.server = serv
+	t.Server = serv
 
 	servicesToWaitFor := func() []services.Service {
 		svs := []services.Service(nil)
@@ -116,7 +116,7 @@ func (t *Cortex) initServer(cfg *Config) (services.Service, error) {
 		return svs
 	}
 
-	s := NewServerService(t.server, servicesToWaitFor)
+	s := NewServerService(t.Server, servicesToWaitFor)
 	serv.HTTP.HandleFunc("/", indexHandler)
 	serv.HTTP.HandleFunc("/config", configHandler(cfg))
 
@@ -131,7 +131,7 @@ func (t *Cortex) initRing(cfg *Config) (serv services.Service, err error) {
 		return nil, err
 	}
 	prometheus.MustRegister(t.ring)
-	t.server.HTTP.Handle("/ring", t.ring)
+	t.Server.HTTP.Handle("/ring", t.ring)
 	return t.ring, nil
 }
 
@@ -166,27 +166,27 @@ func (t *Cortex) initDistributor(cfg *Config) (serv services.Service, err error)
 	// ruler's dependency)
 	canJoinDistributorsRing := (cfg.Target == All || cfg.Target == Distributor)
 
-	t.distributor, err = distributor.New(cfg.Distributor, cfg.IngesterClient, t.overrides, t.ring, canJoinDistributorsRing)
+	t.Distributor, err = distributor.New(cfg.Distributor, cfg.IngesterClient, t.overrides, t.ring, canJoinDistributorsRing)
 	if err != nil {
 		return
 	}
 
-	t.server.HTTP.HandleFunc("/all_user_stats", t.distributor.AllUserStatsHandler)
-	t.server.HTTP.Handle("/api/prom/push", t.httpAuthMiddleware.Wrap(push.Handler(cfg.Distributor, t.distributor.Push)))
-	t.server.HTTP.Handle("/ha-tracker", t.distributor.Replicas)
-	return t.distributor, nil
+	t.Server.HTTP.HandleFunc("/all_user_stats", t.Distributor.AllUserStatsHandler)
+	t.Server.HTTP.Handle("/api/prom/push", t.HTTPAuthMiddleware.Wrap(push.Handler(cfg.Distributor, t.Distributor.Push)))
+	t.Server.HTTP.Handle("/ha-tracker", t.Distributor.Replicas)
+	return t.Distributor, nil
 }
 
 func (t *Cortex) initQuerier(cfg *Config) (serv services.Service, err error) {
 	var tombstonesLoader *purger.TombstonesLoader
 	if cfg.DataPurgerConfig.Enable {
-		tombstonesLoader = purger.NewTombstonesLoader(t.deletesStore)
+		tombstonesLoader = purger.NewTombstonesLoader(t.DeletesStore)
 	} else {
 		// until we need to explicitly enable delete series support we need to do create TombstonesLoader without DeleteStore which acts as noop
 		tombstonesLoader = purger.NewTombstonesLoader(nil)
 	}
 
-	queryable, engine := querier.New(cfg.Querier, t.distributor, t.storeQueryable, tombstonesLoader, prometheus.DefaultRegisterer)
+	queryable, engine := querier.New(cfg.Querier, t.Distributor, t.StoreQueryable, tombstonesLoader, prometheus.DefaultRegisterer)
 	api := v1.NewAPI(
 		engine,
 		queryable,
@@ -207,15 +207,15 @@ func (t *Cortex) initQuerier(cfg *Config) (serv services.Service, err error) {
 	promRouter := route.New().WithPrefix("/api/prom/api/v1")
 	api.Register(promRouter)
 
-	subrouter := t.server.HTTP.PathPrefix("/api/prom").Subrouter()
-	subrouter.PathPrefix("/api/v1").Handler(fakeRemoteAddr(t.httpAuthMiddleware.Wrap(promRouter)))
-	subrouter.Path("/read").Handler(t.httpAuthMiddleware.Wrap(querier.RemoteReadHandler(queryable)))
-	subrouter.Path("/chunks").Handler(t.httpAuthMiddleware.Wrap(querier.ChunksHandler(queryable)))
-	subrouter.Path("/user_stats").Handler(middleware.AuthenticateUser.Wrap(http.HandlerFunc(t.distributor.UserStatsHandler)))
+	subrouter := t.Server.HTTP.PathPrefix("/api/prom").Subrouter()
+	subrouter.PathPrefix("/api/v1").Handler(fakeRemoteAddr(t.HTTPAuthMiddleware.Wrap(promRouter)))
+	subrouter.Path("/read").Handler(t.HTTPAuthMiddleware.Wrap(querier.RemoteReadHandler(queryable)))
+	subrouter.Path("/chunks").Handler(t.HTTPAuthMiddleware.Wrap(querier.ChunksHandler(queryable)))
+	subrouter.Path("/user_stats").Handler(middleware.AuthenticateUser.Wrap(http.HandlerFunc(t.Distributor.UserStatsHandler)))
 
 	// Query frontend worker will only be started after all its dependencies are started, not here.
 	// Worker may also be nil, if not configured, which is OK.
-	worker, err := frontend.NewWorker(cfg.Worker, httpgrpc_server.NewServer(t.server.HTTPServer.Handler), util.Logger)
+	worker, err := frontend.NewWorker(cfg.Worker, httpgrpc_server.NewServer(t.Server.HTTPServer.Handler), util.Logger)
 	if err != nil {
 		return
 	}
@@ -239,7 +239,7 @@ func fakeRemoteAddr(handler http.Handler) http.Handler {
 
 func (t *Cortex) initStoreQueryable(cfg *Config) (services.Service, error) {
 	if cfg.Storage.Engine == storage.StorageEngineChunks {
-		t.storeQueryable = querier.NewChunkStoreQueryable(cfg.Querier, t.store)
+		t.StoreQueryable = querier.NewChunkStoreQueryable(cfg.Querier, t.store)
 		return nil, nil
 	}
 
@@ -248,7 +248,7 @@ func (t *Cortex) initStoreQueryable(cfg *Config) (services.Service, error) {
 		if err != nil {
 			return nil, err
 		}
-		t.storeQueryable = storeQueryable
+		t.StoreQueryable = storeQueryable
 		return storeQueryable, nil
 	}
 
@@ -268,10 +268,11 @@ func (t *Cortex) initIngester(cfg *Config) (serv services.Service, err error) {
 		return
 	}
 
-	client.RegisterIngesterServer(t.server.GRPC, t.ingester)
-	t.server.HTTP.Path("/flush").Handler(http.HandlerFunc(t.ingester.FlushHandler))
-	t.server.HTTP.Path("/shutdown").Handler(http.HandlerFunc(t.ingester.ShutdownHandler))
-	t.server.HTTP.Handle("/push", t.httpAuthMiddleware.Wrap(push.Handler(cfg.Distributor, t.ingester.Push)))
+	client.RegisterIngesterServer(t.Server.GRPC, t.ingester)
+	t.Server.HTTP.Path("/flush").Handler(http.HandlerFunc(t.ingester.FlushHandler))
+	t.Server.HTTP.Path("/shutdown").Handler(http.HandlerFunc(t.ingester.ShutdownHandler))
+	t.Server.HTTP.Handle("/push", t.HTTPAuthMiddleware.Wrap(push.Handler(cfg.Distributor, t.ingester.Push)))
+
 	return t.ingester, nil
 }
 
@@ -321,7 +322,7 @@ func (t *Cortex) initDeleteRequestsStore(cfg *Config) (serv services.Service, er
 		return
 	}
 
-	t.deletesStore, err = purger.NewDeleteStore(cfg.Storage.DeleteStoreConfig, indexClient)
+	t.DeletesStore, err = purger.NewDeleteStore(cfg.Storage.DeleteStoreConfig, indexClient)
 	if err != nil {
 		return
 	}
@@ -365,9 +366,9 @@ func (t *Cortex) initQueryFrontend(cfg *Config) (serv services.Service, err erro
 	t.cache = cache
 	t.frontend.Wrap(tripperware)
 
-	frontend.RegisterFrontendServer(t.server.GRPC, t.frontend)
-	t.server.HTTP.PathPrefix(cfg.HTTPPrefix).Handler(
-		t.httpAuthMiddleware.Wrap(
+	frontend.RegisterFrontendServer(t.Server.GRPC, t.frontend)
+	t.Server.HTTP.PathPrefix(cfg.HTTPPrefix).Handler(
+		t.HTTPAuthMiddleware.Wrap(
 			t.frontend.Handler(),
 		),
 	)
@@ -422,7 +423,7 @@ func (t *Cortex) initTableManager(cfg *Config) (services.Service, error) {
 func (t *Cortex) initRuler(cfg *Config) (serv services.Service, err error) {
 	var tombstonesLoader *purger.TombstonesLoader
 	if cfg.DataPurgerConfig.Enable {
-		tombstonesLoader = purger.NewTombstonesLoader(t.deletesStore)
+		tombstonesLoader = purger.NewTombstonesLoader(t.DeletesStore)
 	} else {
 		// until we need to explicitly enable delete series support we need to do create TombstonesLoader without DeleteStore which acts as noop
 		tombstonesLoader = purger.NewTombstonesLoader(nil)
@@ -430,9 +431,9 @@ func (t *Cortex) initRuler(cfg *Config) (serv services.Service, err error) {
 
 	cfg.Ruler.Ring.ListenPort = cfg.Server.GRPCListenPort
 	cfg.Ruler.Ring.KVStore.MemberlistKV = t.memberlistKV.GetMemberlistKV
-	queryable, engine := querier.New(cfg.Querier, t.distributor, t.storeQueryable, tombstonesLoader, prometheus.DefaultRegisterer)
+	queryable, engine := querier.New(cfg.Querier, t.Distributor, t.StoreQueryable, tombstonesLoader, prometheus.DefaultRegisterer)
 
-	t.ruler, err = ruler.NewRuler(cfg.Ruler, engine, queryable, t.distributor, prometheus.DefaultRegisterer, util.Logger)
+	t.ruler, err = ruler.NewRuler(cfg.Ruler, engine, queryable, t.Distributor, prometheus.DefaultRegisterer, util.Logger)
 	if err != nil {
 		return
 	}
@@ -440,12 +441,12 @@ func (t *Cortex) initRuler(cfg *Config) (serv services.Service, err error) {
 	if cfg.Ruler.EnableAPI {
 		util.WarnExperimentalUse("Ruler API")
 
-		subrouter := t.server.HTTP.PathPrefix(cfg.HTTPPrefix).Subrouter()
-		t.ruler.RegisterRoutes(subrouter, t.httpAuthMiddleware)
-		ruler.RegisterRulerServer(t.server.GRPC, t.ruler)
+		subrouter := t.Server.HTTP.PathPrefix(cfg.HTTPPrefix).Subrouter()
+		t.ruler.RegisterRoutes(subrouter, t.HTTPAuthMiddleware)
+		ruler.RegisterRulerServer(t.Server.GRPC, t.ruler)
 	}
 
-	t.server.HTTP.Handle("/ruler_ring", t.ruler)
+	t.Server.HTTP.Handle("/ruler_ring", t.ruler)
 	return t.ruler, nil
 }
 
@@ -456,7 +457,7 @@ func (t *Cortex) initConfig(cfg *Config) (serv services.Service, err error) {
 	}
 
 	t.configAPI = api.New(t.configDB, cfg.Configs.API)
-	t.configAPI.RegisterRoutes(t.server.HTTP)
+	t.configAPI.RegisterRoutes(t.Server.HTTP)
 	return services.NewIdleService(nil, func(_ error) error {
 		t.configDB.Close()
 		return nil
@@ -468,11 +469,11 @@ func (t *Cortex) initAlertManager(cfg *Config) (serv services.Service, err error
 	if err != nil {
 		return
 	}
-	t.server.HTTP.PathPrefix("/status").Handler(t.alertmanager.GetStatusHandler())
+	t.Server.HTTP.PathPrefix("/status").Handler(t.alertmanager.GetStatusHandler())
 
 	// TODO this clashed with the queirer and the distributor, so we cannot
 	// run them in the same process.
-	t.server.HTTP.PathPrefix("/api/prom").Handler(middleware.AuthenticateUser.Wrap(t.alertmanager))
+	t.Server.HTTP.PathPrefix("/api/prom").Handler(middleware.AuthenticateUser.Wrap(t.alertmanager))
 	return t.alertmanager, nil
 }
 
@@ -486,7 +487,7 @@ func (t *Cortex) initCompactor(cfg *Config) (serv services.Service, err error) {
 	}
 
 	// Expose HTTP endpoints.
-	t.server.HTTP.HandleFunc("/compactor/ring", t.compactor.RingHandler)
+	t.Server.HTTP.HandleFunc("/compactor/ring", t.compactor.RingHandler)
 
 	return t.compactor, nil
 }
@@ -502,7 +503,7 @@ func (t *Cortex) initStoreGateway(cfg *Config) (serv services.Service, err error
 	t.storeGateway = storegateway.NewStoreGateway(cfg.StoreGateway, cfg.TSDB, util.Logger, prometheus.DefaultRegisterer)
 
 	// Expose HTTP endpoints.
-	t.server.HTTP.HandleFunc("/store-gateway/ring", t.storeGateway.RingHandler)
+	t.Server.HTTP.HandleFunc("/store-gateway/ring", t.storeGateway.RingHandler)
 
 	return t.storeGateway, nil
 }
@@ -530,21 +531,21 @@ func (t *Cortex) initDataPurger(cfg *Config) (services.Service, error) {
 		return nil, err
 	}
 
-	t.dataPurger, err = purger.NewDataPurger(cfg.DataPurgerConfig, t.deletesStore, t.store, storageClient)
+	t.dataPurger, err = purger.NewDataPurger(cfg.DataPurgerConfig, t.DeletesStore, t.store, storageClient)
 	if err != nil {
 		return nil, err
 	}
 
 	var deleteRequestHandler *purger.DeleteRequestHandler
-	deleteRequestHandler, err = purger.NewDeleteRequestHandler(t.deletesStore)
+	deleteRequestHandler, err = purger.NewDeleteRequestHandler(t.DeletesStore)
 	if err != nil {
 		return nil, err
 	}
 
-	adminRouter := t.server.HTTP.PathPrefix(cfg.HTTPPrefix + "/api/v1/admin/tsdb").Subrouter()
+	adminRouter := t.Server.HTTP.PathPrefix(cfg.HTTPPrefix + "/api/v1/admin/tsdb").Subrouter()
 
-	adminRouter.Path("/delete_series").Methods("PUT", "POST").Handler(t.httpAuthMiddleware.Wrap(http.HandlerFunc(deleteRequestHandler.AddDeleteRequestHandler)))
-	adminRouter.Path("/delete_series").Methods("GET").Handler(t.httpAuthMiddleware.Wrap(http.HandlerFunc(deleteRequestHandler.GetAllDeleteRequestsHandler)))
+	adminRouter.Path("/delete_series").Methods("PUT", "POST").Handler(t.HTTPAuthMiddleware.Wrap(http.HandlerFunc(deleteRequestHandler.AddDeleteRequestHandler)))
+	adminRouter.Path("/delete_series").Methods("GET").Handler(t.HTTPAuthMiddleware.Wrap(http.HandlerFunc(deleteRequestHandler.GetAllDeleteRequestsHandler)))
 
 	return t.dataPurger, nil
 }
@@ -666,15 +667,26 @@ var modules = map[ModuleName]module{
 }
 
 func InjectModule(name string, deps []string, service func(t *Cortex, cfg *Config) (services.Service, error), wrappedService func(t *Cortex, cfg *Config) (services.Service, error)) {
-	moduleDeps := make([]moduleName, len(deps))
+	moduleDeps := make([]ModuleName, len(deps))
 
 	for i := range deps {
-		moduleDeps[i] = moduleName(deps[i])
+		moduleDeps[i] = ModuleName(deps[i])
 	}
 
-	modules[moduleName(name)] = module{
+	modules[ModuleName(name)] = module{
 		deps:           moduleDeps,
 		service:        service,
 		wrappedService: wrappedService,
 	}
+}
+
+func UpdateDependency(name string, deps []string) {
+	moduleDeps := make([]ModuleName, len(deps))
+
+	for i := range deps {
+		moduleDeps[i] = ModuleName(deps[i])
+	}
+	m := modules[ModuleName(name)]
+	m.deps = moduleDeps
+	modules[ModuleName(name)] = m
 }
